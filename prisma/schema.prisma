@@ -20,5 +20,8 @@ model HearingVideo {
   transcript    String?
   transcribedAt DateTime?
   transcriptStatus String? // "pending" | "done" | "failed" (optional)
+  downloadStatus  String?  // "pending" | "done" | "failed"
+  downloadError   String?
+  downloadFailedAt DateTime?
 }
 

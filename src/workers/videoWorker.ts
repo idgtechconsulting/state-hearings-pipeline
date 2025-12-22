@@ -13,6 +13,7 @@ import "../bootstrap";
 import { transcriptionQueue } from "../queue/transcriptionQueue";
 import { markTranscriptPending } from "../db/transcriptionRepository";
 import type { HearingVideoMetadata } from "../types/video";
+import { prisma } from "../db/client"; // ✅ NEW: status tracking
 
 const VIDEO_DIR = path.resolve("data/videos");
 
@@ -80,10 +81,38 @@ export const worker = new Worker(
     const localPath = path.join(VIDEO_DIR, `${video.chamber}-${baseId}.mp4`);
     const label = video.title;
 
+    // ✅ Mark download as pending in DB (idempotent)
+    await prisma.hearingVideo.upsert({
+      where: { id: video.id },
+      create: {
+        id: video.id,
+        chamber: video.chamber,
+        title: video.title,
+        sourceUrl: video.url,
+        localPath: null,
+        publishedAt: video.publishedAt ?? null,
+        duration: video.duration ?? null,
+        downloadStatus: "pending",
+        downloadError: null,
+        downloadFailedAt: null,
+      },
+      update: {
+        chamber: video.chamber,
+        title: video.title,
+        sourceUrl: video.url,
+        publishedAt: video.publishedAt ?? null,
+        duration: video.duration ?? null,
+        downloadStatus: "pending",
+        downloadError: null,
+        downloadFailedAt: null,
+      },
+    });
+
     // If file exists, treat as previously successful download
     if (fileExists(localPath)) {
       logger.info(`[${label}] File already exists, skipping download`);
 
+      // ✅ Save/upsert with downloadStatus=done
       await saveVideo({ ...video, localPath });
 
       await markTranscriptPending(video.id);
@@ -92,7 +121,7 @@ export const worker = new Worker(
       await transcriptionQueue.add(
         "transcribe",
         { videoId: video.id, localPath },
-        { jobId: video.id } // keep idempotency by original id
+        { jobId: video.id } // idempotent
       );
 
       pipelineProgress.increment("download");
@@ -109,7 +138,6 @@ export const worker = new Worker(
         logger.info(`[${label}] Starting MP4 download`);
         await downloadVideo(video.url, localPath, label, {
           onProgress: async ({ downloadedBytes, totalBytes, bps }) => {
-            // BullMQ progress can be any JSON-serializable value
             await job.updateProgress({
               stage: "download",
               videoId: video.id,
@@ -122,6 +150,7 @@ export const worker = new Worker(
         });
       }
 
+      // ✅ Save/upsert with downloadStatus=done
       await saveVideo({ ...video, localPath });
 
       await markTranscriptPending(video.id);
@@ -147,6 +176,32 @@ export const worker = new Worker(
           await fs.promises.rm(`${localPath}.part.parts`, { recursive: true, force: true });
         }
       } catch {}
+
+      // ✅ Mark DB as failed (keep metadata)
+      try {
+        await prisma.hearingVideo.upsert({
+          where: { id: video.id },
+          create: {
+            id: video.id,
+            chamber: video.chamber,
+            title: video.title,
+            sourceUrl: video.url,
+            localPath: null,
+            publishedAt: video.publishedAt ?? null,
+            duration: video.duration ?? null,
+            downloadStatus: "failed",
+            downloadError: err?.message || String(err),
+            downloadFailedAt: new Date(),
+          },
+          update: {
+            downloadStatus: "failed",
+            downloadError: err?.message || String(err),
+            downloadFailedAt: new Date(),
+          },
+        });
+      } catch (dbErr) {
+        logger.warn({ dbErr }, `[DOWNLOAD FAILED] Could not persist failure status for ${video.id}`);
+      }
 
       logger.error(
         { videoId: video.id, url: video.url, err: err?.message || err, stack: err?.stack },
