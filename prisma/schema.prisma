@@ -1,0 +1,24 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model HearingVideo {
+  id            String   @id
+  chamber       String
+  title         String
+  sourceUrl     String
+  localPath     String?
+  publishedAt   DateTime?
+  duration      Float?
+  downloadedAt  DateTime?
+  createdAt     DateTime @default(now())
+  transcript    String?
+  transcribedAt DateTime?
+  transcriptStatus String? // "pending" | "done" | "failed" (optional)
+}
+
