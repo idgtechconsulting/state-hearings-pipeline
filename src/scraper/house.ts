@@ -8,12 +8,34 @@ import {
   updateSpinner,
   succeedSpinner,
 } from "../utils/spinner";
+import fs from "fs";
+import path from "path";
 
 const HOUSE_ARCHIVE_URL = "https://house.mi.gov/VideoArchive";
 const HOUSE_VIDEO_BASE = "https://www.house.mi.gov/ArchiveVideoFiles";
 
-const httpsAgent = new https.Agent({ rejectUnauthorized: false });
+const HOUSE_INTERMEDIATE_PEM = path.resolve(__dirname, "../certs/intermediate.pem");
+const SYSTEM_CA_BUNDLE = "/etc/ssl/cert.pem";
 
+function getHouseCaBundlePem(): string {
+  const intermediatePem = fs.readFileSync(HOUSE_INTERMEDIATE_PEM, "utf8");
+
+  let systemBundle = "";
+  try {
+    systemBundle = fs.readFileSync(SYSTEM_CA_BUNDLE, "utf8");
+  } catch {
+    systemBundle = "";
+  }
+
+  return `${systemBundle}\n${intermediatePem}\n`;
+}
+
+const httpsAgent = new https.Agent({
+  keepAlive: true,
+  maxSockets: 32,
+  rejectUnauthorized: true,
+  ca: getHouseCaBundlePem(),
+});
 const TWO_MONTHS_AGO = (() => {
   const d = new Date();
   d.setMonth(d.getMonth() - 2);
