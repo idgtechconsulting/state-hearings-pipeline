@@ -1,5 +1,6 @@
 import { prisma } from "./client";
 
+// Find videos that are ready to be transcribed
 export async function getVideosNeedingTranscription() {
   return prisma.hearingVideo.findMany({
     where: {
@@ -13,6 +14,7 @@ export async function getVideosNeedingTranscription() {
   });
 }
 
+// Mark a transcript job as queued
 export async function markTranscriptPending(videoId: string) {
   await prisma.hearingVideo.update({
     where: { id: videoId },
@@ -22,6 +24,7 @@ export async function markTranscriptPending(videoId: string) {
   });
 }
 
+// Store transcript text and mark completion
 export async function markTranscriptDone(videoId: string, transcript: string) {
   await prisma.hearingVideo.update({
     where: { id: videoId },
@@ -33,6 +36,7 @@ export async function markTranscriptDone(videoId: string, transcript: string) {
   });
 }
 
+// Mark a transcript attempt as failed
 export async function markTranscriptFailed(videoId: string) {
   await prisma.hearingVideo.update({
     where: { id: videoId },

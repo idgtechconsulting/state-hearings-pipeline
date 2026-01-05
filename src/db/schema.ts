@@ -1,3 +1,4 @@
+// Status enum used by the pipeline state machine
 export type VideoStatus =
   | "new"
   | "downloading"
@@ -10,6 +11,7 @@ export type VideoStatus =
   | "complete"
   | "error";
 
+// Minimal video record shape stored in the database
 export interface VideoRecord {
   id: string;
   title: string;

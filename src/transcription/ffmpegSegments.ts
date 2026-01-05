@@ -4,8 +4,10 @@ import { spawn } from "child_process";
 
 function run(cmd: string, args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
+    // Spawn the command and capture stderr for errors
     const p = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
 
+    // Accumulate stderr for better failure context
     let stderr = "";
     p.stderr.on("data", (d) => (stderr += d.toString()));
 
@@ -17,21 +19,19 @@ function run(cmd: string, args: string[]): Promise<void> {
   });
 }
 
-/**
- * Extracts segmented MP3 audio from a video.
- * Tuned for speech + small size (avoid 25MB API limit):
- * - mono, 16kHz, 48k bitrate
- * - 10 minute segments by default
- */
+// Extract segmented MP3 audio optimized for speech and API limits
 export async function extractAudioSegments(
   videoPath: string,
   outDir: string,
   segmentSeconds = 600
 ): Promise<string[]> {
+  // Ensure output directory exists
   fs.mkdirSync(outDir, { recursive: true });
 
+  // Build a deterministic filename pattern for ffmpeg
   const pattern = path.join(outDir, "segment_%05d.mp3");
 
+  // Run ffmpeg with mono 16kHz speech settings and timed segments
   await run("ffmpeg", [
     "-y",
     "-i",
@@ -52,12 +52,14 @@ export async function extractAudioSegments(
     pattern,
   ]);
 
+  // Collect generated segments in order
   const segments = fs
     .readdirSync(outDir)
     .filter((f) => f.startsWith("segment_") && f.endsWith(".mp3"))
     .sort()
     .map((f) => path.join(outDir, f));
 
+  // Fail fast if nothing was produced
   if (segments.length === 0) {
     throw new Error(`No audio segments created for ${videoPath}`);
   }
@@ -67,8 +69,9 @@ export async function extractAudioSegments(
 
 export function safeRmDir(dir: string) {
   try {
+    // Best effort cleanup for temp directories
     fs.rmSync(dir, { recursive: true, force: true });
   } catch {
-    // ignore cleanup errors
+    // Ignore cleanup errors
   }
 }

@@ -1,4 +1,3 @@
-// src/pipeline/processVideos.ts
 import { logger } from "../utils/logger";
 import { videoExists } from "../db/videoRepository";
 import type { HearingVideoMetadata } from "../types/video";
@@ -9,19 +8,23 @@ export async function processVideos(videos: HearingVideoMetadata[]) {
   let enqueued = 0;
   let skipped = 0;
 
-  // Start bar with total videos we intend to process (or just videos.length)
+  // Initialize progress tracking for the incoming list
   progress.start(videos.length);
 
   for (const video of videos) {
+    // Skip invalid entries without an id
     if (!video?.id) continue;
 
+    // Avoid duplicate work if we already stored this video
     const exists = await videoExists(video.id);
     if (exists) {
       skipped++;
-      progress.increment(); // show movement
+      // Keep the progress bar moving for skipped items
+      progress.increment();
       continue;
     }
 
+    // Enqueue with retries to handle transient download failures
     await videoQueue.add("download", video, {
       jobId: video.id,
       attempts: 3,
@@ -31,8 +34,10 @@ export async function processVideos(videos: HearingVideoMetadata[]) {
       },
     });
     enqueued++;
+    // Advance progress for each queued video
     progress.increment();
   }
 
+  // Summarize how many were queued vs skipped
   logger.info(`Queue ready — ${enqueued} new videos, ${skipped} already downloaded`);
 }
