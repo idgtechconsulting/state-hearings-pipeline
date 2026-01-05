@@ -13,41 +13,47 @@ import { waitForQueueIdle } from "./utils/waitForQueueIdle";
 import { processTranscriptions } from "./pipeline/processTranscriptions";
 
 async function main() {
+  // Announce pipeline start
   logger.info("🚀 Pipeline starting");
 
-  // 1️⃣ Scrape
+  // 1️⃣ Scrape to collect video metadata
   pipelineProgress.startStage("scrape", 1);
   const videos = await scrapeAll();
   pipelineProgress.increment("scrape");
   pipelineProgress.stopStage("scrape");
 
-  // 2️⃣ Download queue
+  // 2️⃣ Queue downloads for all scraped videos
   pipelineProgress.startStage("download", videos.length);
   await processVideos(videos);
 
+  // Wait for downloads to finish
   logger.info("📥 Videos enqueued, waiting for download workers…");
   await waitForQueueIdle(videoQueue, "download");
 
   pipelineProgress.stopStage("download");
 
-  // 3️⃣ Transcription queue
+  // 3️⃣ Queue transcription jobs
   pipelineProgress.startStage("transcribe", 1);
   await processTranscriptions();
 
+  // Wait for transcriptions to finish
   logger.info("📝 Transcriptions enqueued, waiting for transcription workers…");
   await waitForQueueIdle(transcriptionQueue, "transcribe");
 
   pipelineProgress.stopStage("transcribe");
 
+  // All stages are done
   logger.info("✅ Pipeline complete");
 }
 
 main()
   .then(async () => {
-    await prisma.$disconnect()
+    // Graceful shutdown on success
+    await prisma.$disconnect();
     process.exit(0);
   })
   .catch(async (err) => {
+    // Log and shutdown on failure
     logger.error(err, "❌ Pipeline failed");
     await prisma.$disconnect();
     process.exit(1);

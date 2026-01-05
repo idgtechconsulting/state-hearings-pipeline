@@ -9,7 +9,6 @@ export async function scrapeAll(): Promise<HearingVideoMetadata[]> {
   const MAX_PER_SOURCE = Number(process.env.MAX_VIDEOS_PER_SOURCE || Infinity);
   const ENABLE_HOUSE = process.env.ENABLE_HOUSE !== "false";
   const ENABLE_SENATE = process.env.ENABLE_SENATE !== "false";
-  // process.env.ENABLE_SENATE !== "false";
 
   if (ENABLE_HOUSE) {
     logger.info("House scraping ENABLED");

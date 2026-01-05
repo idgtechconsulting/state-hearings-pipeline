@@ -9,7 +9,9 @@ export async function downloadHls(
   outputPath: string,
   label: string
 ): Promise<void> {
+  // Spawn ffmpeg and let it handle the HLS fetch and remux
   return new Promise((resolve, reject) => {
+    // Build a minimal ffmpeg command for resilient streaming capture
     const ffmpeg = spawn("ffmpeg", [
       "-y",
       "-hide_banner",
@@ -27,10 +29,10 @@ export async function downloadHls(
       outputPath,
     ]);
 
+    // Resolve when ffmpeg finishes and bubble up non zero exits
     ffmpeg.on("close", (code) => {
       if (code === 0) resolve();
       else reject(new Error(`ffmpeg exited ${code}`));
     });
   });
 }
-

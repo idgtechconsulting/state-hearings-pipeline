@@ -1,4 +1,3 @@
-// src/utils/waitForQueueIdle.ts
 import cliProgress from "cli-progress";
 import type { Queue } from "bullmq";
 import { QueueEvents } from "bullmq";
@@ -13,11 +12,13 @@ type DownloadProgressPayload = {
   bps?: number | null; // bytes/sec
 };
 
+// Limit concurrent per file bars to keep output readable
 const MAX_ACTIVE_BARS = Math.max(
   1,
   Math.min(12, Number(process.env.MAX_ACTIVE_DOWNLOAD_BARS || "6"))
 );
 
+// Format bytes into a compact human string
 function formatBytes(n: number) {
   if (!Number.isFinite(n)) return "—";
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -30,6 +31,7 @@ function formatBytes(n: number) {
   return `${x.toFixed(i === 0 ? 0 : 1)}${units[i]}`;
 }
 
+// Convert seconds to a short ETA label
 function formatDuration(seconds: number) {
   if (!Number.isFinite(seconds) || seconds < 0) return "—";
   const s = Math.floor(seconds % 60);
@@ -40,6 +42,7 @@ function formatDuration(seconds: number) {
   return `${s}s`;
 }
 
+// Trim titles to avoid overflowing the terminal
 function shortTitle(s: string, max = 28) {
   const t = String(s || "").replace(/\s+/g, " ").trim();
   if (t.length <= max) return t;
@@ -50,17 +53,20 @@ export async function waitForQueueIdle(
   queue: Queue,
   stageLabel: "download" | "transcribe"
 ) {
+  // Check if we have any jobs to wait on
   const totalJobs = await queue.getJobCountByTypes("waiting", "active", "delayed");
   if (!totalJobs) {
     logger.info(`⏳ ${stageLabel}: queue empty`);
     return;
   }
 
+  // Announce the wait so operators know we are blocking
   logger.info(`⏳ ${stageLabel}: waiting for queue to drain (${totalJobs} jobs)`);
 
+  // Listen to job progress events
   const qe = new QueueEvents(queue.name, { connection });
 
-  // Per-job tracking
+  // Per job tracking
   const totalsByJob = new Map<string, number>(); // jobId -> totalBytes
   const doneBytesByJob = new Map<string, number>(); // jobId -> downloadedBytes
   const titleByJob = new Map<string, string>(); // jobId -> title
@@ -69,9 +75,10 @@ export async function waitForQueueIdle(
   const completed = new Set<string>();
   let failed = 0;
 
-  // We render bars only for active jobs (up to MAX_ACTIVE_BARS)
+  // Render bars only for active jobs up to MAX_ACTIVE_BARS
   const barByJob = new Map<string, cliProgress.SingleBar>();
 
+  // Group bar for overall batch progress
   const multibar = new cliProgress.MultiBar(
     {
       clearOnComplete: false,
@@ -81,7 +88,7 @@ export async function waitForQueueIdle(
     cliProgress.Presets.shades_classic
   );
 
-  // Batch bar
+  // Batch bar for aggregate progress
   const batchBar = multibar.create(1000, 0, {
     label: stageLabel.toUpperCase().padEnd(10),
     meta: "starting…",
@@ -91,7 +98,7 @@ export async function waitForQueueIdle(
     let bar = barByJob.get(jobId);
     if (bar) return bar;
 
-    // limit how many per-job bars we render
+    // Limit how many per job bars we render
     if (barByJob.size >= MAX_ACTIVE_BARS) return null;
 
     bar = multibar.create(1000, 0, {
@@ -107,12 +114,14 @@ export async function waitForQueueIdle(
     const bar = barByJob.get(jobId);
     if (!bar) return;
     try {
+      // Stop the bar to freeze its last state
       bar.stop();
     } catch {}
     barByJob.delete(jobId);
   }
 
   function recomputeBatch() {
+    // Aggregate totals across all observed jobs
     let totalBytes = 0;
     let doneBytes = 0;
     let bpsSum = 0;
@@ -126,6 +135,7 @@ export async function waitForQueueIdle(
     const completedCount = completed.size;
     const inFlight = totalJobs - completedCount - failed;
 
+    // Use byte totals when available otherwise fall back to job count
     const pct =
       totalBytes > 0 ? doneBytes / totalBytes : completedCount / totalJobs;
 
@@ -133,6 +143,7 @@ export async function waitForQueueIdle(
     const etaSeconds =
       totalBytes > 0 && bpsSum > 0 ? remaining / bpsSum : Number.NaN;
 
+    // Update the batch bar with totals and ETA
     batchBar.update(Math.floor(pct * 1000), {
       meta:
         totalBytes > 0
@@ -144,9 +155,10 @@ export async function waitForQueueIdle(
   }
 
   function updateJobBar(jobId: string) {
-    // Only show per-file bars for downloads (transcribe can be added later)
+    // Only show per file bars for downloads
     if (stageLabel !== "download") return;
 
+    // Remove bars for completed jobs
     if (completed.has(jobId)) {
       dropJobBar(jobId);
       return;
@@ -160,6 +172,7 @@ export async function waitForQueueIdle(
     const bar = ensureJobBar(jobId);
     if (!bar) return;
 
+    // Compute per job percent and ETA
     const pct = total > 0 ? done / total : 0;
     const remaining = total > 0 ? Math.max(0, total - done) : 0;
     const etaSeconds = bps > 0 && total > 0 ? remaining / bps : Number.NaN;
@@ -176,7 +189,7 @@ export async function waitForQueueIdle(
   }
 
   function enforceActiveBarLimit() {
-    // If we have more bars than allowed (due to race), trim arbitrary extras.
+    // Trim extra bars if we exceed the limit
     while (barByJob.size > MAX_ACTIVE_BARS) {
       const [jobId] = barByJob.keys();
       dropJobBar(jobId);
@@ -209,6 +222,7 @@ export async function waitForQueueIdle(
   });
 
   qe.on("completed", ({ jobId }) => {
+    // Mark completed jobs and refresh totals
     if (jobId) {
       completed.add(jobId);
       dropJobBar(jobId);
@@ -217,6 +231,7 @@ export async function waitForQueueIdle(
   });
 
   qe.on("failed", ({ jobId }) => {
+    // Count failures and refresh totals
     if (jobId) {
       completed.add(jobId);
       dropJobBar(jobId);
@@ -242,9 +257,11 @@ export async function waitForQueueIdle(
 
     if (pending === 0) break;
 
+    // Sleep briefly before checking again
     await new Promise((r) => setTimeout(r, 500));
   }
 
+  // Cleanup event listeners and progress UI
   await qe.close();
   multibar.stop();
   logger.info(`✅ ${stageLabel}: queue drained`);

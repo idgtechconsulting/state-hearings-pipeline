@@ -1,7 +1,7 @@
-// src/db/videoRepository.ts
 import { prisma } from "../db/client";
 import type { HearingVideoMetadata } from "../types/video";
 
+// Check for an existing video by id
 export async function videoExists(id: string) {
   return prisma.hearingVideo.findUnique({
     where: { id },
@@ -9,6 +9,7 @@ export async function videoExists(id: string) {
   });
 }
 
+// Upsert a fully downloaded video with metadata
 export async function saveVideo(
   video: HearingVideoMetadata & { localPath: string }
 ) {
@@ -43,6 +44,7 @@ export async function saveVideo(
   });
 }
 
+// Create or update a pending download record
 export async function markDownloadPending(id: string) {
   return prisma.hearingVideo.upsert({
     where: { id },
@@ -61,6 +63,7 @@ export async function markDownloadPending(id: string) {
   });
 }
 
+// Record a download failure with error details
 export async function markDownloadFailed(id: string, error: string) {
   return prisma.hearingVideo.update({
     where: { id },
@@ -71,4 +74,3 @@ export async function markDownloadFailed(id: string, error: string) {
     },
   });
 }
-

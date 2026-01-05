@@ -5,10 +5,12 @@ import https from "https";
 import { pipeline } from "stream/promises";
 import { logger } from "../utils/logger";
 
+// House host and cert bundle paths for stricter TLS validation
 const HOUSE_HOST = "www.house.mi.gov";
 const HOUSE_INTERMEDIATE_PEM = path.resolve(__dirname, "../certs/intermediate.pem");
 const SYSTEM_CA_BUNDLE = "/etc/ssl/cert.pem";
 
+// Parallel part count for House downloads with a sane cap
 const DEFAULT_PARTS = Math.max(1, Math.min(16, Number(process.env.HOUSE_DOWNLOAD_PARTS || "6")));
 
 // Progress update throttle (ms)
@@ -24,12 +26,15 @@ type DownloadVideoOptions = {
   onProgress?: (p: DownloadProgress) => void;
 };
 
+// Cache the composed CA bundle so we only read files once
 let cachedHouseCa: string | null = null;
 function getHouseCaBundlePem(): string {
   if (cachedHouseCa) return cachedHouseCa;
 
+  // Load the intermediate required by the House TLS chain
   const intermediatePem = fs.readFileSync(HOUSE_INTERMEDIATE_PEM, "utf8");
 
+  // Try to append the system bundle if present
   let systemBundle = "";
   try {
     systemBundle = fs.readFileSync(SYSTEM_CA_BUNDLE, "utf8");
@@ -37,19 +42,23 @@ function getHouseCaBundlePem(): string {
     systemBundle = "";
   }
 
+  // Concatenate bundles to expand the trusted chain
   cachedHouseCa = `${systemBundle}\n${intermediatePem}\n`;
   return cachedHouseCa;
 }
 
+// Reuse agents to keep sockets warm
 let cachedHouseAgent: https.Agent | null = null;
 let cachedDefaultAgent: https.Agent | null = null;
 
 function getHttpsAgentForUrl(url: string): https.Agent {
   const host = new URL(url).host;
 
+  // Allow insecure only for the House host when explicitly enabled
   const allowInsecure =
     process.env.ALLOW_INSECURE_HOUSE_TLS === "true" && host === HOUSE_HOST;
 
+  // House host uses a custom CA bundle for full verification
   if (host === HOUSE_HOST && !allowInsecure) {
     if (!cachedHouseAgent) {
       cachedHouseAgent = new https.Agent({
@@ -63,6 +72,7 @@ function getHttpsAgentForUrl(url: string): https.Agent {
     return cachedHouseAgent;
   }
 
+  // Default agent for all other hosts
   if (!cachedDefaultAgent) {
     cachedDefaultAgent = new https.Agent({
       keepAlive: true,
@@ -74,6 +84,7 @@ function getHttpsAgentForUrl(url: string): https.Agent {
   return cachedDefaultAgent;
 }
 
+// Browser like headers for lenient servers
 const headers = {
   "User-Agent":
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
@@ -83,6 +94,7 @@ const headers = {
   Connection: "keep-alive",
 };
 
+// Head request to check size and range support
 async function headInfo(url: string, agent: https.Agent) {
   const res = await axios.head(url, {
     timeout: 30_000,
@@ -100,6 +112,7 @@ async function headInfo(url: string, agent: https.Agent) {
   return { contentLength: len, acceptRanges };
 }
 
+// Throttle progress events and compute transfer speed
 function makeProgressEmitter(onProgress?: (p: DownloadProgress) => void, totalBytes?: number) {
   let downloadedBytes = 0;
   let lastEmit = 0;
@@ -111,6 +124,7 @@ function makeProgressEmitter(onProgress?: (p: DownloadProgress) => void, totalBy
     downloadedBytes += n;
     const now = Date.now();
 
+    // Skip if no listener or too soon
     if (!onProgress) return;
 
     if (now - lastEmit >= PROGRESS_EVERY_MS) {
@@ -126,6 +140,7 @@ function makeProgressEmitter(onProgress?: (p: DownloadProgress) => void, totalBy
     }
   }
 
+  // Emit a final update at the end of the transfer
   function flush() {
     if (!onProgress) return;
     const now = Date.now();
@@ -138,6 +153,7 @@ function makeProgressEmitter(onProgress?: (p: DownloadProgress) => void, totalBy
   return { addBytes, flush, getDownloaded: () => downloadedBytes };
 }
 
+// Single stream download for simple servers
 async function downloadSingle(
   url: string,
   tmpPath: string,
@@ -147,6 +163,7 @@ async function downloadSingle(
 ) {
   const emitter = makeProgressEmitter(opts.onProgress, totalBytes);
 
+  // Stream the response directly to disk
   const res = await axios.get(url, {
     responseType: "stream",
     timeout: 0,
@@ -162,6 +179,7 @@ async function downloadSingle(
   emitter.flush();
 }
 
+// Parallel range download with part stitching
 async function downloadRanged(
   url: string,
   tmpPath: string,
@@ -178,9 +196,11 @@ async function downloadRanged(
 
   const emitter = makeProgressEmitter(opts.onProgress, contentLength);
 
+  // Create a temp directory to store parts
   const partsDir = `${tmpPath}.parts`;
   await fs.promises.mkdir(partsDir, { recursive: true });
 
+  // Split the file into evenly sized ranges
   const chunkSize = Math.ceil(contentLength / parts);
   const partFiles = Array.from({ length: parts }, (_, i) => path.join(partsDir, `part-${i}`));
 
@@ -190,6 +210,7 @@ async function downloadRanged(
       const end = Math.min(contentLength - 1, (i + 1) * chunkSize - 1);
       if (start > end) return;
 
+      // Fetch each range to its own part file
       const res = await axios.get(url, {
         responseType: "stream",
         timeout: 0,
@@ -206,6 +227,7 @@ async function downloadRanged(
   );
 
   // stitch
+  // Concatenate parts in order into the final temp file
   const out = fs.createWriteStream(tmpPath, { highWaterMark: 1024 * 1024 });
 
   for (const f of partFiles) {
@@ -225,6 +247,7 @@ async function downloadRanged(
 
   emitter.flush();
 
+  // Cleanup the parts directory
   await fs.promises.rm(partsDir, { recursive: true, force: true });
 
   return { totalBytes: contentLength, downloadedBytes: emitter.getDownloaded() };
@@ -236,24 +259,28 @@ export async function downloadVideo(
   label: string,
   opts: DownloadVideoOptions = {}
 ): Promise<void> {
+  // Ensure output directory exists
   await fs.promises.mkdir(path.dirname(localPath), { recursive: true });
 
   const tmpPath = `${localPath}.part`;
   const agent = getHttpsAgentForUrl(url);
 
-  // Only use ranged/multipart for the MI House host; others default to single-stream.
+  // Only use ranged/multipart for the MI House host; others default to single-stream
   const host = new URL(url).host;
   const parts = host === HOUSE_HOST ? DEFAULT_PARTS : 1;
 
+  // Log the selected strategy for visibility
   logger.info(`[${label}] Starting MP4 download (parts=${parts})`);
 
   try {
     await downloadRanged(url, tmpPath, agent, parts, opts);
 
+    // Atomic move into place
     await fs.promises.rename(tmpPath, localPath);
     logger.info(`[${label}] Download completed`);
   } catch (err: any) {
     try {
+      // Best effort cleanup
       await fs.promises.rm(tmpPath, { force: true });
       await fs.promises.rm(`${tmpPath}.parts`, { recursive: true, force: true });
     } catch {}
@@ -263,6 +290,7 @@ export async function downloadVideo(
       msg.includes("unable to verify the first certificate") ||
       msg.includes("unable to get issuer certificate")
     ) {
+      // Surface TLS guidance that matches our custom CA handling
       logger.error(
         `[${label}] TLS verification failed for ${url}. ` +
           `Using ${SYSTEM_CA_BUNDLE} + ${HOUSE_INTERMEDIATE_PEM}. ` +

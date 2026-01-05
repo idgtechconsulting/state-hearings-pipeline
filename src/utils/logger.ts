@@ -1,8 +1,10 @@
 import pino from "pino";
 
+// Build a logger with pretty output for local runs
 export const logger = pino({
   level: process.env.LOG_LEVEL || "info",
-  transport: process.env.NODE_ENV === "production"
-    ? undefined
-    : { target: "pino-pretty", options: { colorize: true } }
+  transport:
+    process.env.NODE_ENV === "production"
+      ? undefined
+      : { target: "pino-pretty", options: { colorize: true } },
 });
