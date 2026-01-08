@@ -11,7 +11,10 @@ import {
 import fs from "fs";
 import path from "path";
 
-const HOUSE_ARCHIVE_URL = "https://house.mi.gov/VideoArchive";
+const HOUSE_ARCHIVE_URL = "https://www.house.mi.gov/VideoArchive";
+const HOUSE_ARCHIVE_YEAR = Number(process.env.HOUSE_ARCHIVE_YEAR || "2025");
+const HOUSE_ARCHIVE_TYPE = process.env.HOUSE_ARCHIVE_TYPE || "All";
+const HOUSE_ARCHIVE_DATE = process.env.HOUSE_ARCHIVE_DATE || "";
 const HOUSE_VIDEO_BASE = "https://www.house.mi.gov/ArchiveVideoFiles";
 
 const HOUSE_INTERMEDIATE_PEM = path.resolve(
@@ -52,10 +55,16 @@ const TWO_MONTHS_AGO = (() => {
 export async function scrapeHouse(): Promise<HearingVideoMetadata[]> {
   startSpinner("Scanning House videos…");
 
-  // Fetch the archive page
+  // Fetch the archive page using the partial handler endpoint
   const { data } = await axios.get(HOUSE_ARCHIVE_URL, {
     httpsAgent,
     headers: { "User-Agent": "Mozilla/5.0" },
+    params: {
+      handler: "ArchiveVideoPartial",
+      Year: HOUSE_ARCHIVE_YEAR,
+      Type: HOUSE_ARCHIVE_TYPE,
+      Date: HOUSE_ARCHIVE_DATE,
+    },
   });
 
   // Parse the archive page HTML
@@ -65,9 +74,26 @@ export async function scrapeHouse(): Promise<HearingVideoMetadata[]> {
   let scanned = 0;
   let currentCommittee = "House";
 
+  // The handler response may not include the outer #VideosList wrapper.
+  // Prefer #VideosList when present, otherwise fall back to the partial root (#legislativeQuestions),
+  // and finally to the document root.
+  const $videosRoot =
+    $("#VideosList").length > 0
+      ? $("#VideosList")
+      : $("#legislativeQuestions").length > 0
+        ? $("#legislativeQuestions")
+        : $("body");
+
+  if ($videosRoot.length === 0) {
+    // Cheerio fragments may not include <body>; fall back to the document root element(s)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ($videosRoot as any) = $.root().children() as any;
+  }
+
   // Each committee heading is a <strong> element inside the list
-  $("#VideosList strong").each((_, strong) => {
-    currentCommittee = $(strong).text().split("|")[0].trim();
+  $videosRoot.find("li.page-search-container strong").each((_, strong) => {
+    // Only take the first text node to avoid including the nested "X Videos" span
+    currentCommittee = $(strong).contents().first().text().split("|")[0].trim();
 
     // Grab all video links for the current committee section
     const links = $(strong)
@@ -79,12 +105,12 @@ export async function scrapeHouse(): Promise<HearingVideoMetadata[]> {
       if (!href) return;
 
       // Pull the video file name from the player link
-      const url = new URL(`https://house.mi.gov${href}`);
+      const url = new URL(`https://www.house.mi.gov${href}`);
       const videoFile = url.searchParams.get("video");
       if (!videoFile) return;
 
       // Treat the link text as a date and skip older videos
-      const dateText = $(a).text().trim();
+      const dateText = $(a).text().trim().replace(/\s+/g, " ");
       const publishedAt = new Date(dateText);
       if (isNaN(publishedAt.getTime())) return;
       if (publishedAt < TWO_MONTHS_AGO) return;
